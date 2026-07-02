@@ -1,0 +1,390 @@
+
+local aimbotRunning = false
+local currentTarget = nil
+local fovCircle = Drawing.new("Circle")
+local connections = {}
+local MB
+local startPos
+
+fovCircle.Visible = false
+fovCircle.Filled = false
+
+function CreateMB()
+    if MB then MB:Destroy() end
+
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "AimbotGui"
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.Parent = game:GetService("CoreGui")
+    
+    MB = Instance.new("TextButton")
+    MB.Name = "AimbotButton"
+    MB.Size = UDim2.new(0, 100, 0, 35)
+    MB.Position = getgenv().Aimbot.Settings.MBPosition or UDim2.new(0.5, -50, 0.7, 0)
+    MB.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    MB.BorderSizePixel = 0
+    MB.Text = "Lock Target"
+    MB.TextColor3 = Color3.fromRGB(255, 255, 255)
+    MB.TextSize = 14
+    MB.Font = Enum.Font.GothamBold
+    MB.AutoButtonColor = false
+    MB.Parent = screenGui
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = MB
+
+    local isDragging = false
+    local touchStartTime = 0
+    local lastPosition = nil
+    local moveConnection = nil
+
+    function SetState(active)
+        MB.Text = active and "Unlock Target" or "Lock Target"
+        MB.BackgroundColor3 = active and Color3.fromRGB(200, 40, 40) or Color3.fromRGB(40, 40, 40)
+    end
+
+    function TT()
+        if not currentTarget then
+            local newTarget = GetClosestPlayer()
+            if newTarget then
+                currentTarget = newTarget
+                aimbotRunning = true
+                SetState(true)
+            end
+        else
+            currentTarget = nil
+            aimbotRunning = false
+            SetState(false)
+        end
+    end
+
+    function CleanupConnections()
+        if moveConnection then
+            moveConnection:Disconnect()
+            moveConnection = nil
+        end
+        isDragging = false
+        lastPosition = nil
+    end
+
+    MB.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            touchStartTime = tick()
+            lastPosition = input.Position
+            
+            moveConnection = UserInputService.InputChanged:Connect(function(changedInput)
+                if (changedInput.UserInputType == Enum.UserInputType.MouseMovement or 
+                    changedInput.UserInputType == Enum.UserInputType.Touch) and 
+                    lastPosition and tick() - touchStartTime > 0.15 then
+                    
+                    isDragging = true
+                    local delta = changedInput.Position - lastPosition
+                    MB.Position = UDim2.new(
+                        MB.Position.X.Scale,
+                        MB.Position.X.Offset + delta.X,
+                        MB.Position.Y.Scale,
+                        MB.Position.Y.Offset + delta.Y
+                    )
+                    getgenv().Aimbot.Settings.MBPosition = MB.Position
+                    lastPosition = changedInput.Position
+                    
+                    if isDragging then
+                        MB.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+                    end
+                end
+            end)
+        end
+    end)
+    
+    MB.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch or input.UserInputType == Enum.UserInputType.MouseButton1 then
+            local touchwait = tick() - touchStartTime
+            if not isDragging and touchwait < 0.15 then
+                TT()
+            end
+            CleanupConnections()
+            SetState(currentTarget ~= nil)
+        end
+    end)
+
+    SetState(false)
+end
+
+function UTK()
+    getgenv().Aimbot.Settings.TriggerKey = (platformOverride == "Mobile") and Enum.UserInputType.MouseButton1 or Enum.UserInputType.MouseButton2
+    
+    if platformOverride == "Mobile" then
+        getgenv().Aimbot.Settings.FOVMode = "Middle"
+    else
+        getgenv().Aimbot.Settings.FOVMode = "On Cursor"
+    end
+end
+
+function GetClosestPlayer()
+    local settings = getgenv().Aimbot.Settings
+    if not settings.Enabled then return nil end
+    
+    local fovSettings = getgenv().Aimbot.FOVSettings
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    local mousePos = UserInputService:GetMouseLocation()
+    if settings.FOVMode == "Middle" then
+        local viewportSize = Camera.ViewportSize
+        mousePos = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+    end
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character and player.Character:FindFirstChild(settings.LockPart) then
+            local character = player.Character
+            local humanoid = character:FindFirstChildOfClass("Humanoid")
+            
+        if humanoid then
+            local skipPlayer = false
+            
+            if settings.AliveCheck and (humanoid.Health <= 0 or character:FindFirstChild("ForceField")) then
+                skipPlayer = true
+            end
+            
+            if settings.TeamCheck and player.Team == LocalPlayer.Team then
+                skipPlayer = true
+            end                if settings.WhitelistEnabled then
+                    local isWhitelisted = false
+                    if type(settings.WhitelistedPlayers) == "table" then
+                        for _, whitelistedName in pairs(settings.WhitelistedPlayers) do
+                            if player.Name == whitelistedName then
+                                isWhitelisted = true
+                                break
+                            end
+                        end
+                    end
+                    if isWhitelisted then
+                        skipPlayer = true
+                    end
+                end
+                
+                if not skipPlayer then
+                    local targetPart = character[settings.LockPart]
+                    local worldPos, onScreen = Camera:WorldToViewportPoint(targetPart.Position)
+                    
+                    if onScreen then
+                    if settings.WallCheck then
+                        local rayOrigin = Camera.CFrame.Position
+                        local rayDirection = (targetPart.Position - rayOrigin).Unit
+                        local rayDistance = (targetPart.Position - rayOrigin).Magnitude
+                        local rayParams = RaycastParams.new()
+                        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+                        rayParams.FilterDescendantsInstances = {LocalPlayer.Character, character}
+                        
+                        local ray = workspace:Raycast(rayOrigin, rayDirection * rayDistance, rayParams)
+                        if ray then
+                            skipPlayer = true
+                        end
+                    end
+                        
+                        if not skipPlayer then
+                            local screenPos = Vector2.new(worldPos.X, worldPos.Y)
+                            local distance = (mousePos - screenPos).Magnitude
+                            
+                            if platformOverride == "Mobile" then
+                                local characterDistance = (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")) and
+                                    (LocalPlayer.Character.HumanoidRootPart.Position - character.HumanoidRootPart.Position).Magnitude or math.huge
+                                if characterDistance < shortestDistance then
+                                    shortestDistance = characterDistance
+                                    closestPlayer = player
+                                end
+                            else
+                                if distance < shortestDistance then
+                                    if fovSettings.Enabled then
+                                        if distance <= fovSettings.Radius then
+                                            shortestDistance = distance
+                                            closestPlayer = player
+                                        end
+                                    else
+                                        if (mousePos - screenPos).Magnitude <= 200 then
+                                            shortestDistance = distance
+                                            closestPlayer = player
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+function AimAtTarget(target)
+    if not target or not target.Character then return end
+    
+    local settings = getgenv().Aimbot.Settings
+    local targetPart = target.Character:FindFirstChild(settings.LockPart)
+    if not targetPart then return end
+
+    if settings.WallCheck then
+        local rayOrigin = Camera.CFrame.Position
+        local rayDirection = (targetPart.Position - rayOrigin).Unit
+        local rayDistance = (targetPart.Position - rayOrigin).Magnitude
+        local rayParams = RaycastParams.new()
+        rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+        rayParams.FilterDescendantsInstances = {LocalPlayer.Character, target.Character}
+        
+        local ray = workspace:Raycast(rayOrigin, rayDirection * rayDistance, rayParams)
+        if ray then
+            if platformOverride == "Mobile" and MB then
+                MB.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+                MB.Text = "Target Hidden"
+            end
+            return
+        else
+            if platformOverride == "Mobile" and MB and MB.Text == "Target Hidden" then
+                MB.BackgroundColor3 = Color3.fromRGB(200, 40, 40)
+                MB.Text = "Unlock Target"
+            end
+        end
+    end
+    
+    local targetPosition = targetPart.Position
+    local velocity = targetPart.Velocity
+    local prediction = settings.Prediction
+    
+    if prediction > 0 and velocity then
+        local bulletTime = prediction * 0.016
+        targetPosition = targetPosition + (velocity * bulletTime)
+    end
+    
+    local sensitivity = settings.Sensitivity or 1
+    if platformOverride == "Mobile" then
+        if settings.Smoothness > 0 then
+            local currentCFrame = Camera.CFrame
+            local targetCFrame = CFrame.new(currentCFrame.Position, targetPosition)
+            Camera.CFrame = currentCFrame:Lerp(targetCFrame, math.clamp(sensitivity * (1 / (settings.Smoothness * 10 + 1)), 0, 1))
+        else
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPosition)
+        end
+    else
+        if settings.Smoothness > 0 then
+            local currentCFrame = Camera.CFrame
+            local targetCFrame = CFrame.new(currentCFrame.Position, targetPosition)
+            local smoothness = settings.Smoothness / 10
+            local alpha = math.clamp((1 - smoothness) * sensitivity, 0, 1)
+            Camera.CFrame = currentCFrame:Lerp(targetCFrame, alpha)
+        else
+            Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPosition)
+        end
+    end
+end
+
+function UpdateFOVCircle()
+    local settings = getgenv().Aimbot.Settings
+    local fovSettings = getgenv().Aimbot.FOVSettings
+    
+    if fovSettings.Enabled and fovSettings.Visible and settings.Enabled then
+        fovCircle.Visible = true
+        fovCircle.Radius = fovSettings.Radius
+        fovCircle.NumSides = fovSettings.NumSides
+        fovCircle.Thickness = fovSettings.Thickness
+        fovCircle.Transparency = fovSettings.Transparency
+        fovCircle.Filled = fovSettings.Filled
+        fovCircle.Color = currentTarget and fovSettings.LockedColor or fovSettings.Color
+        if settings.FOVMode == "Middle" then
+            local viewportSize = Camera.ViewportSize
+            fovCircle.Position = Vector2.new(viewportSize.X / 2, viewportSize.Y / 2)
+        else
+            fovCircle.Position = UserInputService:GetMouseLocation()
+        end
+    else
+        fovCircle.Visible = false
+    end
+end
+
+local lastTargetTime = 0
+local targetLostTime = 0
+local wasTargetHidden = false
+
+connections.renderStepped = RunService.RenderStepped:Connect(function()
+    local settings = getgenv().Aimbot.Settings
+    UpdateFOVCircle()
+    
+    if settings.Enabled then
+        local currentTime = tick()
+        local isTargetValid = currentTarget and 
+            currentTarget.Character and 
+            currentTarget.Character:FindFirstChild(settings.LockPart) and
+            (currentTarget.Character:FindFirstChildOfClass("Humanoid") and 
+             currentTarget.Character:FindFirstChildOfClass("Humanoid").Health > 0)
+        
+        if currentTarget and not isTargetValid then
+            targetLostTime = currentTime
+            currentTarget = nil
+        end
+        
+        local shouldUpdateTarget = not currentTarget
+        
+        if platformOverride == "Mobile" then
+            if aimbotRunning and currentTarget and isTargetValid then
+                AimAtTarget(currentTarget)
+            end
+        elseif aimbotRunning then
+            if shouldUpdateTarget then
+                local newTarget = GetClosestPlayer()
+                if newTarget then
+                    currentTarget = newTarget
+                    lastTargetTime = currentTime
+                end
+            end
+            if currentTarget and isTargetValid then
+                AimAtTarget(currentTarget)
+            end
+        end
+    else
+        currentTarget = nil
+        targetLostTime = tick()
+    end
+end)
+
+local lastTarget = nil
+
+connections.inputBegan = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    local settings = getgenv().Aimbot.Settings
+    
+    if platformOverride == "Mobile" then
+        return
+    end
+    
+    if input.UserInputType == settings.TriggerKey or 
+       (input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == settings.TriggerKey) then
+        if settings.Toggle then
+            aimbotRunning = not aimbotRunning
+            if not aimbotRunning then
+                currentTarget = nil
+            end
+        else
+            aimbotRunning = true
+        end
+    end
+end)
+
+connections.inputEnded = UserInputService.InputEnded:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    
+    local settings = getgenv().Aimbot.Settings
+    
+    if platformOverride == "Mobile" then return end
+    
+    if not settings.Toggle then
+        if input.UserInputType == settings.TriggerKey or 
+           (input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == settings.TriggerKey) then
+            aimbotRunning = false
+            lastTarget = currentTarget
+            currentTarget = nil
+        end
+    end
+end)
